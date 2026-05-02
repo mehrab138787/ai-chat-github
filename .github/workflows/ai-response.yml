@@ -3,50 +3,40 @@ name: AI Response
 on:
   workflow_dispatch:
     inputs:
-      gist_id:
-        description: 'Gist ID'
+      message:
+        description: 'User message'
         required: true
         type: string
-      user_message:
-        description: 'User message'
+      id:
+        description: 'Request ID'
         required: true
         type: string
 
 jobs:
   respond:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Get Message
-        id: getmsg
-        run: |
-          MSG="${{ inputs.user_message }}"
-          echo "message=$MSG" >> $GITHUB_OUTPUT
-          
-      - name: Call AI
+      - name: Call OpenRouter
         id: ai
         run: |
           RESPONSE=$(curl -s https://openrouter.ai/api/v1/chat/completions \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${{ secrets.OPENROUTER_API_KEY }}" \
-            -d "{\"model\":\"openrouter/free\",\"messages\":[{\"role\":\"user\",\"content\":\"${{ steps.getmsg.outputs.message }}\"}]}")
+            -d '{"model":"openrouter/free","messages":[{"role":"user","content":"${{ inputs.message }}"}]}')
           
-          ANSWER=$(echo $RESPONSE | jq -r '.choices[0].message.content // "خطا"')
+          ANSWER=$(echo $RESPONSE | jq -r '.choices[0].message.content')
           echo "answer=$ANSWER" >> $GITHUB_OUTPUT
           
-      - name: Update Gist
+      - name: Save response to file
         run: |
-          cat > payload.json << EOF
-          {
-            "files": {
-              "message.json": {
-                "content": "{\"user_message\":\"${{ steps.getmsg.outputs.message }}\",\"ai_response\":\"${{ steps.ai.outputs.answer }}\",\"status\":\"done\"}"
-              }
-            }
-          }
-          EOF
+          echo '${{ steps.ai.outputs.answer }}' > response_${{ inputs.id }}.txt
           
-          curl -X PATCH \
-            -H "Authorization: token ${{ secrets.GH_TOKEN }}" \
-            -H "Content-Type: application/json" \
-            https://api.github.com/gists/${{ inputs.gist_id }} \
-            -d @payload.json
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add response_${{ inputs.id }}.txt
+          git commit -m "Add response for ${{ inputs.id }}" || echo "No changes"
+          git push

@@ -1,0 +1,58 @@
+name: AI Response via OpenRouter
+
+on:
+  gist:
+    types: [created, edited]
+  workflow_dispatch:
+
+jobs:
+  respond:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get Gist ID
+        run: |
+          GIST_ID=$(echo ${{ github.event.gist.id }})
+          echo "GIST_ID=$GIST_ID" >> $GITHUB_ENV
+          
+      - name: Fetch message from Gist
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          curl -L \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/gists/${{ env.GIST_ID }} > gist.json
+          
+          USER_MSG=$(cat gist.json | jq -r '.files."message.json".content' | jq -r '.user_message')
+          echo "USER_MSG=$USER_MSG" >> $GITHUB_ENV
+          
+      - name: Call OpenRouter AI
+        id: ai
+        env:
+          OPENROUTER_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          RESPONSE=$(curl -s https://openrouter.ai/api/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $OPENROUTER_KEY" \
+            -d '{
+              "model": "google/gemini-2.0-flash-exp:free",
+              "messages": [{"role": "user", "content": "'"$USER_MSG"'"}]
+            }')
+          
+          AI_TEXT=$(echo $RESPONSE | jq -r '.choices[0].message.content')
+          echo "AI_TEXT=$AI_TEXT" >> $GITHUB_ENV
+          
+      - name: Update Gist with AI response
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          NEW_CONTENT=$(jq -n \
+            --arg user "$USER_MSG" \
+            --arg ai "$AI_TEXT" \
+            '{user_message: $user, ai_response: $ai, timestamp: (now | todateiso8601), status: "completed"}')
+          
+          curl -X PATCH \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Content-Type: application/json" \
+            https://api.github.com/gists/${{ env.GIST_ID }} \
+            -d "{\"files\":{\"message.json\":{\"content\":$(echo $NEW_CONTENT | jq -Rsa)}}}"

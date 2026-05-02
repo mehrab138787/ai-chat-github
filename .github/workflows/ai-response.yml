@@ -16,23 +16,31 @@ jobs:
   respond:
     runs-on: ubuntu-latest
     steps:
-      - name: Call OpenRouter AI
+      - name: Call OpenRouter AI (Free Router)
         id: ai
         env:
           OPENROUTER_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
-          ESCAPED_MSG=$(echo '${{ inputs.user_message }}' | sed "s/'/\\'/g")
+          echo "User message: ${{ inputs.user_message }}"
           
           RESPONSE=$(curl -s https://openrouter.ai/api/v1/chat/completions \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $OPENROUTER_KEY" \
             -d '{
-              "model": "google/gemini-2.0-flash-exp:free",
-              "messages": [{"role": "user", "content": "'"$ESCAPED_MSG"'"}]
+              "model": "openrouter/free",
+              "messages": [{"role": "user", "content": "'"${{ inputs.user_message }}"'"}]
             }')
           
-          AI_TEXT=$(echo $RESPONSE | jq -r '.choices[0].message.content')
+          echo "Raw response: $RESPONSE"
+          
+          AI_TEXT=$(echo $RESPONSE | jq -r '.choices[0].message.content // empty')
+          
+          if [ -z "$AI_TEXT" ]; then
+            AI_TEXT="خطا: پاسخی دریافت نشد"
+          fi
+          
           echo "AI_TEXT=$AI_TEXT" >> $GITHUB_ENV
+          echo "AI text: $AI_TEXT"
           
       - name: Update Gist with AI response
         env:
@@ -40,7 +48,7 @@ jobs:
         run: |
           NEW_CONTENT=$(jq -n \
             --arg user "${{ inputs.user_message }}" \
-            --arg ai "$AI_TEXT" \
+            --arg ai "${{ env.AI_TEXT }}" \
             '{user_message: $user, ai_response: $ai, timestamp: (now | todateiso8601), status: "completed"}')
           
           curl -X PATCH \

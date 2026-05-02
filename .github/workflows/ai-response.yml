@@ -21,42 +21,25 @@ jobs:
         env:
           OPENROUTER_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
-          # تبدیل پیام به base64 برای جلوگیری از هرگونه کاراکتر خاص
-          MSG_BASE64=$(echo -n "${{ inputs.message }}" | base64 -w 0)
-          
-          RESPONSE=$(curl -s https://openrouter.ai/api/v1/chat/completions \
+          # درخواست مستقیم با timeout کمتر
+          RESPONSE=$(curl -s --max-time 15 \
+            -X POST https://openrouter.ai/api/v1/chat/completions \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $OPENROUTER_KEY" \
-            -d "{
-              \"model\": \"openrouter/free\",
-              \"messages\": [{\"role\": \"user\", \"content\": \"$(echo $MSG_BASE64 | base64 -d)\"}]
-            }")
+            -d "{\"model\":\"openrouter/free\",\"messages\":[{\"role\":\"user\",\"content\":\"${{ inputs.message }}\"}]}")
           
-          # استخراج پاسخ و تبدیل به base64 برای ذخیره امن
           ANSWER=$(echo $RESPONSE | jq -r '.choices[0].message.content // "پاسخی دریافت نشد"')
-          ANSWER_BASE64=$(echo -n "$ANSWER" | base64 -w 0)
-          echo "ANSWER_BASE64=$ANSWER_BASE64" >> $GITHUB_ENV
+          echo "ANSWER<<EOF" >> $GITHUB_ENV
+          echo "$ANSWER" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
           
       - name: Update Gist
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
-          # دیکود پاسخ از base64
-          FINAL_ANSWER=$(echo "${{ env.ANSWER_BASE64 }}" | base64 -d)
-          
-          # استفاده از heredoc برای جلوگیری از مشکلات کاراکترها
-          cat > /tmp/payload.json << EOF
-          {
-            "files": {
-              "response.txt": {
-                "content": $(echo "$FINAL_ANSWER" | jq -Rsa .)
-              }
-            }
-          }
-          EOF
-          
-          curl -X PATCH \
+          # آپدیت سریع Gist
+          curl -s -X PATCH \
             -H "Authorization: token $GH_TOKEN" \
             -H "Content-Type: application/json" \
             https://api.github.com/gists/${{ inputs.id }} \
-            -d @/tmp/payload.json
+            -d "{\"files\":{\"response.txt\":{\"content\":$(echo "${{ env.ANSWER }}" | jq -Rsa .)}}}"

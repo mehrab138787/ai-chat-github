@@ -1,4 +1,4 @@
-name: AI Response via OpenRouter
+name: AI Response
 
 on:
   workflow_dispatch:
@@ -16,44 +16,37 @@ jobs:
   respond:
     runs-on: ubuntu-latest
     steps:
-      - name: Call OpenRouter AI
-        env:
-          OPENROUTER_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      - name: Get Message
+        id: getmsg
         run: |
-          # تبدیل پیام به JSON-safe format
-          USER_MSG=$(echo '${{ inputs.user_message }}' | jq -Rsa .)
+          MSG="${{ inputs.user_message }}"
+          echo "message=$MSG" >> $GITHUB_OUTPUT
           
+      - name: Call AI
+        id: ai
+        run: |
           RESPONSE=$(curl -s https://openrouter.ai/api/v1/chat/completions \
             -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $OPENROUTER_KEY" \
-            -d "{
-              \"model\": \"openrouter/free\",
-              \"messages\": [{\"role\": \"user\", \"content\": $USER_MSG}]
-            }")
+            -H "Authorization: Bearer ${{ secrets.OPENROUTER_API_KEY }}" \
+            -d "{\"model\":\"openrouter/free\",\"messages\":[{\"role\":\"user\",\"content\":\"${{ steps.getmsg.outputs.message }}\"}]}")
           
-          echo "RESPONSE_JSON=$RESPONSE" >> $GITHUB_ENV
+          ANSWER=$(echo $RESPONSE | jq -r '.choices[0].message.content // "خطا"')
+          echo "answer=$ANSWER" >> $GITHUB_OUTPUT
           
-      - name: Extract and Update Gist
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      - name: Update Gist
         run: |
-          AI_TEXT=$(echo '${{ env.RESPONSE_JSON }}' | jq -r '.choices[0].message.content // "پاسخی دریافت نشد"')
-          
-          echo "AI_TEXT=$AI_TEXT" >> $GITHUB_ENV
+          cat > payload.json << EOF
+          {
+            "files": {
+              "message.json": {
+                "content": "{\"user_message\":\"${{ steps.getmsg.outputs.message }}\",\"ai_response\":\"${{ steps.ai.outputs.answer }}\",\"status\":\"done\"}"
+              }
+            }
+          }
+          EOF
           
           curl -X PATCH \
-            -H "Authorization: token $GH_TOKEN" \
+            -H "Authorization: token ${{ secrets.GH_TOKEN }}" \
             -H "Content-Type: application/json" \
             https://api.github.com/gists/${{ inputs.gist_id }} \
-            -d "{
-              \"files\": {
-                \"message.json\": {
-                  \"content\": $(echo '{
-                    \"user_message\": \"'${{ inputs.user_message }}'\",
-                    \"ai_response\": \"'$AI_TEXT'\",
-                    \"timestamp\": \"'$(date -Iseconds)'\",
-                    \"status\": \"completed\"
-                  }' | jq -Rsa .)
-                }
-              }
-            }"
+            -d @payload.json

@@ -8,35 +8,47 @@ on:
         required: true
         type: string
       id:
-        description: 'Request ID'
+        description: 'Gist ID'
         required: true
         type: string
 
 jobs:
   respond:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
-      - name: Call OpenRouter
+      - name: Call OpenRouter AI
         id: ai
+        env:
+          OPENROUTER_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
+          # تبدیل پیام به فرمت JSON-safe
+          MSG=$(echo '${{ inputs.message }}' | jq -Rsa .)
+          
           RESPONSE=$(curl -s https://openrouter.ai/api/v1/chat/completions \
             -H "Content-Type: application/json" \
-            -H "Authorization: Bearer ${{ secrets.OPENROUTER_API_KEY }}" \
-            -d '{"model":"openrouter/free","messages":[{"role":"user","content":"${{ inputs.message }}"}]}')
+            -H "Authorization: Bearer $OPENROUTER_KEY" \
+            -d "{
+              \"model\": \"openrouter/free\",
+              \"messages\": [{\"role\": \"user\", \"content\": $MSG}]
+            }")
           
-          ANSWER=$(echo $RESPONSE | jq -r '.choices[0].message.content')
-          echo "answer=$ANSWER" >> $GITHUB_OUTPUT
+          echo "Response: $RESPONSE"
           
-      - name: Save response to file
+          ANSWER=$(echo $RESPONSE | jq -r '.choices[0].message.content // "خطا: پاسخی دریافت نشد"')
+          echo "ANSWER=$ANSWER" >> $GITHUB_ENV
+          
+      - name: Update Gist with Response
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
-          echo '${{ steps.ai.outputs.answer }}' > response_${{ inputs.id }}.txt
-          
-      - name: Commit and push
-        run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-          git add response_${{ inputs.id }}.txt
-          git commit -m "Add response for ${{ inputs.id }}" || echo "No changes"
-          git push
+          curl -X PATCH \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Content-Type: application/json" \
+            https://api.github.com/gists/${{ inputs.id }} \
+            -d "{
+              \"files\": {
+                \"response.txt\": {
+                  \"content\": $(echo "${{ env.ANSWER }}" | jq -Rsa .)
+                }
+              }
+            }"

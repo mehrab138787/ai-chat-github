@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       gist_id:
-        description: 'Gist ID containing the message'
+        description: 'Gist ID'
         required: true
         type: string
       user_message:
@@ -16,43 +16,44 @@ jobs:
   respond:
     runs-on: ubuntu-latest
     steps:
-      - name: Call OpenRouter AI (Free Router)
-        id: ai
+      - name: Call OpenRouter AI
         env:
           OPENROUTER_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
-          echo "User message: ${{ inputs.user_message }}"
+          # تبدیل پیام به JSON-safe format
+          USER_MSG=$(echo '${{ inputs.user_message }}' | jq -Rsa .)
           
           RESPONSE=$(curl -s https://openrouter.ai/api/v1/chat/completions \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $OPENROUTER_KEY" \
-            -d '{
-              "model": "openrouter/free",
-              "messages": [{"role": "user", "content": "'"${{ inputs.user_message }}"'"}]
-            }')
+            -d "{
+              \"model\": \"openrouter/free\",
+              \"messages\": [{\"role\": \"user\", \"content\": $USER_MSG}]
+            }")
           
-          echo "Raw response: $RESPONSE"
+          echo "RESPONSE_JSON=$RESPONSE" >> $GITHUB_ENV
           
-          AI_TEXT=$(echo $RESPONSE | jq -r '.choices[0].message.content // empty')
-          
-          if [ -z "$AI_TEXT" ]; then
-            AI_TEXT="خطا: پاسخی دریافت نشد"
-          fi
-          
-          echo "AI_TEXT=$AI_TEXT" >> $GITHUB_ENV
-          echo "AI text: $AI_TEXT"
-          
-      - name: Update Gist with AI response
+      - name: Extract and Update Gist
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
-          NEW_CONTENT=$(jq -n \
-            --arg user "${{ inputs.user_message }}" \
-            --arg ai "${{ env.AI_TEXT }}" \
-            '{user_message: $user, ai_response: $ai, timestamp: (now | todateiso8601), status: "completed"}')
+          AI_TEXT=$(echo '${{ env.RESPONSE_JSON }}' | jq -r '.choices[0].message.content // "پاسخی دریافت نشد"')
+          
+          echo "AI_TEXT=$AI_TEXT" >> $GITHUB_ENV
           
           curl -X PATCH \
             -H "Authorization: token $GH_TOKEN" \
             -H "Content-Type: application/json" \
             https://api.github.com/gists/${{ inputs.gist_id }} \
-            -d "{\"files\":{\"message.json\":{\"content\":$(echo $NEW_CONTENT | jq -Rsa)}}}"
+            -d "{
+              \"files\": {
+                \"message.json\": {
+                  \"content\": $(echo '{
+                    \"user_message\": \"'${{ inputs.user_message }}'\",
+                    \"ai_response\": \"'$AI_TEXT'\",
+                    \"timestamp\": \"'$(date -Iseconds)'\",
+                    \"status\": \"completed\"
+                  }' | jq -Rsa .)
+                }
+              }
+            }"
